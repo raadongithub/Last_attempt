@@ -1,0 +1,17 @@
+{
+  "zero_optimization": {
+    "stage": 2,
+    "offload_optimizer": {
+      "device": "cpu",
+      "pin_memory": true,
+      "buffer_count": 4
+    },
+    "contiguous_gradients": true,
+    "overlap_comm": false,
+    "allgather_partitions": true,
+    "reduce_scatter": true
+  },
+  "fp16": {
+    "enabled": true
+  }
+}
