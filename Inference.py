@@ -9,7 +9,7 @@ device = "cpu"
 print("Using device:", device.upper())
 
 # Load the fine-tuned model and tokenizer from the specified directory.
-model_path = r"C:\FYP\000 Raad\Finetuning\SmolLM2-360m-finetuned"
+model_path = r".\SmolLM2-360m-finetuned"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path)
 
