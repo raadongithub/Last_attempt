@@ -7,7 +7,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Truncation.*")
 
 # Define model directory
-model_dir = r"C:\Users\RAAD\Downloads\SmolLM2-Model-Safetensor"
+model_dir = r"\SmolLM2-Model-Safetensor"
 
 # Load tokenizer
 model_id = "HuggingFaceTB/SmolLM2-360M-Instruct"
