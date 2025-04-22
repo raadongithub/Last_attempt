@@ -3,6 +3,12 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import asyncio
 import websockets
 import json
+import warnings
+from transformers import logging
+
+# Suppress specific warnings from the transformers library
+logging.set_verbosity_error()  # Suppresses all warnings from transformers
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Use CPU for inference.
 device = "cpu"
