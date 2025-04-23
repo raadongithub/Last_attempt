@@ -15,6 +15,7 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 
 # Load base model
 model = AutoModelForCausalLM.from_pretrained(
+    x=4,
     model_id,
     device_map="auto",
     torch_dtype=torch.bfloat16,
