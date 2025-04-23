@@ -7,7 +7,10 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Truncation.*")
 
 # Define model directory
-model_dir = r"\SmolLM2-Model-Safetensor"
+model_dir = r"SmolLM2-Model-Safetensor"
+
+# Determine the device
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Load tokenizer
 model_id = "HuggingFaceTB/SmolLM2-360M-Instruct"
@@ -16,7 +19,6 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 # Load base model
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
-    device_map="auto",
     torch_dtype=torch.bfloat16,
 )
 
@@ -24,18 +26,18 @@ model = AutoModelForCausalLM.from_pretrained(
 state_dict = load_file(os.path.join(model_dir, "model.safetensors"))
 model.load_state_dict(state_dict, strict=False)
 
-# Move model to appropriate device
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# Move model and tokenizer to the appropriate device
 model.to(device)
+tokenizer.model_max_length = model.config.max_position_embeddings  # Ensure tokenizer respects model's max length
 
 print(f"Model loaded successfully on {device}.")
 
 # Create pipeline with truncation explicitly set to True
-pipe_device = 0 if torch.cuda.is_available() else -1
 generator = pipeline(
     "text-generation", 
     model=model, 
     tokenizer=tokenizer,
+    device=device,  # Specify the device for the pipeline
     truncation=True  # Explicitly enable truncation
 )
 
@@ -71,8 +73,12 @@ def generate_npc_response(npc_role: str, player_input: str, emotion: str, max_le
     Generate a response using the fine-tuned model, and return the generated text.
     """
     prompt = create_prompt(npc_role, player_input, emotion)
-    output = generator(
-        prompt,
+    
+    # Ensure the prompt is tokenized and moved to the correct device
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    
+    output = model.generate(
+        **inputs,
         max_length=max_length,
         num_return_sequences=1,
         do_sample=True,
@@ -81,8 +87,11 @@ def generate_npc_response(npc_role: str, player_input: str, emotion: str, max_le
         top_p=0.9,
     )
 
+    # Decode the generated tokens
+    generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+
     # Remove the prompt from the generated text
-    generated_text = output[0]['generated_text'][len(prompt):].strip()
+    generated_text = generated_text[len(prompt):].strip()
 
     # Optionally truncate on first newline
     if "\n" in generated_text:
