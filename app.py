@@ -3,18 +3,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
 from safetensors.torch import load_file
 import json
-import asyncio
-import threading
 import warnings
-from flask import Flask, render_template, request
+from flask import Flask, request
 from flask_socketio import SocketIO
 
-warnings.filterwarnings("ignore", category=UserWarning, message=".*Truncation.*")
+# Suppress unnecessary warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # Initialize Flask and SocketIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=1)
 
 # Model loading and initialization
 class NPCModel:
@@ -23,7 +22,8 @@ class NPCModel:
         self.tokenizer = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_loaded = False
-        self.load_model()
+        # Set a shorter generation length for faster responses
+        self.default_max_length = 150
 
     def load_model(self):
         try:
@@ -34,38 +34,54 @@ class NPCModel:
             model_id = "HuggingFaceTB/SmolLM2-360M-Instruct"
             self.tokenizer = AutoTokenizer.from_pretrained(model_id)
             
-            # Load base model
+            # Load base model with optimizations
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,  # Reduce memory usage during loading
             )
             
             # Load fine-tuned weights
             state_dict = load_file(os.path.join(model_dir, "model.safetensors"))
             self.model.load_state_dict(state_dict, strict=False)
             
-            # Move model to the appropriate device
+            # Move model to device
             self.model.to(self.device)
             self.tokenizer.model_max_length = self.model.config.max_position_embeddings
             
+            # Set model to evaluation mode for faster inference
+            self.model.eval()
+            
+            # Pre-compile model with TorchScript for faster inference if using CUDA
+            if self.device == "cuda":
+                try:
+                    # Dummy input for tracing
+                    dummy_input = self.tokenizer("Hello", return_tensors="pt").to(self.device)
+                    self.model = torch.jit.trace(self.model, (dummy_input.input_ids,), check_trace=False)
+                    print("Model optimized with TorchScript")
+                except Exception as e:
+                    print(f"Could not optimize with TorchScript: {e}")
+            
             self.model_loaded = True
             print(f"Model loaded successfully on {self.device}.")
+            
+            # Warm up the model with a test input (reduces initial latency)
+            self.warm_up()
+            
         except Exception as e:
             print(f"Error loading model: {e}")
             self.model_loaded = False
-
-    def truncate_on_ngram_repetition(self, text: str, n: int = 3) -> str:
-        """Truncate the generated text to avoid n-gram repetition."""
-        words = text.split()
-        seen_ngrams = {}
-        for i in range(len(words) - (n - 1)):
-            ngram = tuple(words[i:i+n])
-            if ngram in seen_ngrams:
-                truncated_text = " ".join(words[:i])
-                last_period = truncated_text.rfind('.')
-                return truncated_text[:last_period+1] if last_period != -1 else truncated_text
-            seen_ngrams[ngram] = i
-        return text
+    
+    def warm_up(self):
+        """Warm up the model to reduce initial latency"""
+        try:
+            test_input = "Hello"
+            inputs = self.tokenizer(test_input, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                self.model.generate(**inputs, max_length=20)
+            print("Model warmed up successfully")
+        except Exception as e:
+            print(f"Model warm-up failed: {e}")
 
     def create_prompt(self, npc_role: str, player_input: str, emotion: str) -> str:
         """Create a formatted prompt string."""
@@ -76,47 +92,58 @@ class NPCModel:
             f"Response:"
         )
 
-    def generate_response(self, npc_role: str, player_input: str, emotion: str, max_length: int = 100) -> str:
+    def generate_response(self, npc_role: str, player_input: str, emotion: str, max_length: int = None) -> str:
         """Generate a response using the fine-tuned model."""
         if not self.model_loaded:
             return "Error: Model not loaded"
         
+        # Use default if not specified
+        if max_length is None or max_length > 500:
+            max_length = self.default_max_length
+            
         try:
             prompt = self.create_prompt(npc_role, player_input, emotion)
             
-            # Tokenize and move to correct device
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            # Tokenize input with truncation enabled
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
             
-            # Set to inference mode for optimal performance
+            # Generate with optimized parameters
             with torch.no_grad():
                 output = self.model.generate(
                     **inputs,
                     max_length=max_length,
                     num_return_sequences=1,
                     do_sample=True,
-                    temperature=0.8,
-                    top_k=50,
+                    temperature=0.7,  # Slightly reduced for faster decisions
+                    top_k=40,
                     top_p=0.9,
+                    repetition_penalty=1.2,  # Add penalty to avoid repetition
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    no_repeat_ngram_size=3,  # Built-in n-gram repetition prevention
                 )
             
             # Decode the generated tokens
             generated_text = self.tokenizer.decode(output[0], skip_special_tokens=True)
             
             # Remove the prompt from the generated text
-            generated_text = generated_text[len(prompt):].strip()
+            response = generated_text[len(prompt):].strip()
             
             # Truncate on first newline
-            if "\n" in generated_text:
-                generated_text = generated_text.split("\n")[0]
+            if "\n" in response:
+                response = response.split("\n")[0]
             
-            generated_text = self.truncate_on_ngram_repetition(generated_text)
-            return generated_text.strip()
+            return response.strip()
+            
         except Exception as e:
             print(f"Error generating response: {e}")
-            return f"Error generating response: {str(e)}"
+            return f"Sorry, I'm having trouble processing your request."
 
-# Initialize the model in a background thread
+# Initialize the model
 model = NPCModel()
+
+# Load the model in the main thread before server starts
+print("Loading model...")
+model.load_model()
 
 # Flask routes
 @app.route('/')
@@ -125,7 +152,7 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Early Retirement Model</title>
+        <title>NPC Model Service</title>
     </head>
     <body>
         <h1>Model is live</h1>
@@ -149,35 +176,20 @@ def handle_disconnect():
 @socketio.on('generate_response')
 def handle_generate_response(data):
     try:
-        npc_role = data.get('npc_role', '')
+        # Extract data with defaults
+        npc_role = data.get('npc_role', 'Shopkeeper')
         player_input = data.get('player_input', '')
-        emotion = data.get('emotion', '')
-        max_length = data.get('max_length', 100)
-
+        emotion = data.get('emotion', 'Neutral')
+        max_length = min(data.get('max_length', 150), 250)  # Cap max length
+        
+        # Generate the response
         response = model.generate_response(npc_role, player_input, emotion, max_length)
         
+        # Return a simple response format
         return {"response": response, "status": "success"}
     except Exception as e:
         print(f"WebSocket error: {e}")
-        return {"response": "", "status": "error", "message": str(e)}
-
-# Optional REST API endpoint for non-WebSocket clients
-@app.route('/api/generate', methods=['POST'])
-def api_generate():
-    try:
-        data = request.json
-        npc_role = data.get('npc_role', '')
-        player_input = data.get('player_input', '')
-        emotion = data.get('emotion', '')
-        max_length = data.get('max_length', 100)
-
-        response = model.generate_response(npc_role, player_input, emotion, max_length)
-        
-        return json.dumps({"response": response, "status": "success"})
-    except Exception as e:
-        return json.dumps({"response": "", "status": "error", "message": str(e)})
+        return {"response": "Sorry, I couldn't understand that.", "status": "error"}
 
 if __name__ == "__main__":
-    # Run the Flask app with SocketIO
-    # Use threaded=True for better handling of multiple connections
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
