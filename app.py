@@ -4,8 +4,14 @@ import os
 from safetensors.torch import load_file
 import json
 import warnings
+import logging
 from flask import Flask, request
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Suppress unnecessary warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -13,7 +19,10 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Initialize Flask and SocketIO
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=1)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
+                   ping_timeout=120, ping_interval=1)
+
+print("Server initialized for threading.")
 
 # Model loading and initialization
 class NPCModel:
@@ -22,7 +31,6 @@ class NPCModel:
         self.tokenizer = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_loaded = False
-        # Set a shorter generation length for faster responses
         self.default_max_length = 150
 
     def load_model(self):
@@ -103,6 +111,7 @@ class NPCModel:
             
         try:
             prompt = self.create_prompt(npc_role, player_input, emotion)
+            print(f"Processing prompt: {prompt}")
             
             # Tokenize input with truncation enabled
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
@@ -114,12 +123,12 @@ class NPCModel:
                     max_length=max_length,
                     num_return_sequences=1,
                     do_sample=True,
-                    temperature=0.7,  # Slightly reduced for faster decisions
+                    temperature=0.7,
                     top_k=40,
                     top_p=0.9,
-                    repetition_penalty=1.2,  # Add penalty to avoid repetition
+                    repetition_penalty=1.2,
                     pad_token_id=self.tokenizer.eos_token_id,
-                    no_repeat_ngram_size=3,  # Built-in n-gram repetition prevention
+                    no_repeat_ngram_size=3,
                 )
             
             # Decode the generated tokens
@@ -132,6 +141,7 @@ class NPCModel:
             if "\n" in response:
                 response = response.split("\n")[0]
             
+            print(f"Generated response: {response}")
             return response.strip()
             
         except Exception as e:
@@ -168,6 +178,7 @@ def status():
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
+    socketio.emit('connection_status', {'status': 'connected'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -175,6 +186,9 @@ def handle_disconnect():
 
 @socketio.on('generate_response')
 def handle_generate_response(data):
+    """Handle incoming generation requests"""
+    print(f"\n*** Received generation request: {data} ***")
+    
     try:
         # Extract data with defaults
         npc_role = data.get('npc_role', 'Shopkeeper')
@@ -182,14 +196,22 @@ def handle_generate_response(data):
         emotion = data.get('emotion', 'Neutral')
         max_length = min(data.get('max_length', 150), 250)  # Cap max length
         
-        # Generate the response
+        print(f"Processing request for NPC: {npc_role}, Input: {player_input}, Emotion: {emotion}")
+        
+        # Generate the response using the model
         response = model.generate_response(npc_role, player_input, emotion, max_length)
         
-        # Return a simple response format
+        print(f"Sending response: {response}")
+        
+        # Explicitly emit the response back to the client
+        emit('generate_response', {"response": response, "status": "success"})
+        
         return {"response": response, "status": "success"}
     except Exception as e:
-        print(f"WebSocket error: {e}")
-        return {"response": "Sorry, I couldn't understand that.", "status": "error"}
+        error_msg = f"Error generating response: {str(e)}"
+        print(error_msg)
+        emit('generate_response', {"response": "Sorry, I couldn't process your request.", "status": "error"})
+        return {"response": "Error processing request", "status": "error", "error": str(e)}
 
 if __name__ == "__main__":
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
