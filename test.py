@@ -25,7 +25,7 @@ model = AutoModelForCausalLM.from_pretrained(
 # Load fine-tuned weights
 state_dict = load_file(os.path.join(model_dir, "model.safetensors"))
 model.load_state_dict(state_dict, strict=False)
-
+asif = "Fizza"
 # Move model and tokenizer to the appropriate device
 model.to(device)
 tokenizer.model_max_length = model.config.max_position_embeddings  # Ensure tokenizer respects model's max length
