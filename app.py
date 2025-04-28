@@ -23,6 +23,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading',
                    ping_timeout=120, ping_interval=1)
 
 print("Server initialized for threading.")
+print("HELLO")
 
 # Model loading and initialization
 class NPCModel:
