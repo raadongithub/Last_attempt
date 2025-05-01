@@ -31,7 +31,7 @@ model.to(device)
 tokenizer.model_max_length = model.config.max_position_embeddings  # Ensure tokenizer respects model's max length
 
 print(f"Model loaded successfully on {device}.")
-
+print("Keep going")
 # Create pipeline with truncation explicitly set to True
 generator = pipeline(
     "text-generation", 
