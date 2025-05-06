@@ -56,7 +56,7 @@ def truncate_on_ngram_repetition(text: str, n: int = 3) -> str:
             return truncated_text[:last_period+1] if last_period != -1 else truncated_text
         seen_ngrams[ngram] = i
     return text
- #ficed
+ 
 def create_prompt(npc_role: str, player_input: str, emotion: str) -> str:
     """
     Create a formatted prompt string based on the NPC role, player input, and emotion.
@@ -67,6 +67,7 @@ def create_prompt(npc_role: str, player_input: str, emotion: str) -> str:
         f"Emotion: {emotion}\n"
         f"Response:"
     )
+
 
 def generate_npc_response(npc_role: str, player_input: str, emotion: str, max_length: int = 100) -> str:
     """
